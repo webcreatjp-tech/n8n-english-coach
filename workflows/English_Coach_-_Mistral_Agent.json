@@ -1,0 +1,186 @@
+{
+  "id": "5g6ArXIAtFdZ1KE1",
+  "name": "English Coach - Mistral Agent",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "english-coach/ask",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5b749459-a2c5-4757-8d9b-13b36f00d525",
+      "name": "Webhook POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        2704,
+        512
+      ],
+      "webhookId": "english-coach-ask"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst topic = body.topic || 'everyday';\nconst topicDesc = body.topic_desc || 'everyday life';\nconst level = body.level || 'A1';\nconst history = body.history || [];\n\nconst types = ['multiple_choice', 'fill_blank', 'translation_fr_to_en'];\nconst lastType = history.length ? history[history.length - 1].type : null;\nconst available = types.filter(t => t !== lastType);\nconst type = available[Math.floor(Math.random() * available.length)];\n\nconst recent = history.slice(-6);\nconst correctRate = recent.length > 0\n  ? recent.filter(h => h.correct === true).length / recent.length\n  : 0.5;\n\nlet difficultyNote = 'Standard difficulty for this level.';\nif (correctRate >= 0.8 && recent.length >= 4) {\n  difficultyNote = 'The student is doing very well. Make the exercise slightly harder, use less common vocabulary.';\n} else if (correctRate <= 0.3 && recent.length >= 4) {\n  difficultyNote = 'The student is struggling. Make the exercise easier, use very common everyday words only.';\n}\n\nconst typeSpec = {\n  multiple_choice: '\"options\": array of exactly 4 short strings (no A) B) prefix), \"correct_index\": integer 0-3. The 3 wrong answers must be plausible but clearly wrong — not random gibberish.',\n  fill_blank: '\"sentence_before\": string, \"sentence_after\": string (can be \"\"), \"answer\": the ONE missing English word (not a phrase), \"hint_fr\": the EXACT French translation of the missing word — just the word itself, nothing else. Example: if answer is \"today\", hint_fr must be \"aujourd\\'hui\". If answer is \"open\", hint_fr must be \"ouvert(e)\".',\n  translation_fr_to_en: '\"french_text\": a short practical French sentence (max 8 words), \"answer_en\": main correct English translation, \"accepted_variants\": array of 2-3 acceptable English alternatives'\n};\n\nconst qualityRules = `\nQUALITY RULES — mandatory:\n- For fill_blank: the blank must test a real vocabulary word the student needs to learn. The hint_fr must be the direct French translation of the answer word — nothing more, nothing less. Never use vague hints like \"maintenant / ce jour\".\n- For multiple_choice: the question must test real knowledge, not just recall a fixed phrase. Wrong options must be believable.\n- For translation_fr_to_en: use practical sentences a person would actually say or write.\n- Never generate trivial exercises where the answer is obvious without knowing English.\n- Always make the exercise genuinely useful for a beginner learning English in real life.`;\n\nconst prompt = `You are an English teacher for a French adult beginner at level ${level}.\nGenerate ONE English learning exercise.\n\nTopic area: ${topicDesc}\nExercise type: ${type}\nDifficulty note: ${difficultyNote}\n${qualityRules}\n\nRequired JSON fields for type \"${type}\": ${typeSpec[type]}\n\nAlso always include:\n- \"type\": \"${type}\"\n- \"question_en\": exercise instruction in English (short, clear)\n- \"question_fr_hint\": French explanation of what is asked — must be clear and useful for a beginner (1 sentence)\n- \"explanation_fr\": 1-2 sentences in French explaining why the answer is correct + one concrete grammar or vocabulary tip\n- \"explanation_en\": same explanation in English (used for text-to-speech audio feedback)\n- \"adapted\": true if you adjusted difficulty based on performance, false otherwise\n\nRespond ONLY with valid compact JSON. No markdown. No extra text. No comments.`;\n\nreturn [{ json: { prompt, type, level, topic } }];"
+      },
+      "id": "784d2087-aaad-403c-8e83-5cef3cfd2c8f",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2960,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "options": {
+          "systemMessage": "You are an English language teacher. You always respond with valid JSON only. No markdown fences, no explanation, no extra text. Pure JSON."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        3216,
+        480
+      ],
+      "id": "37fad493-4893-49ed-8c69-57e071f5573b",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "mistral-small-latest",
+        "options": {
+          "maxTokens": 600,
+          "temperature": 0.7
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        3168,
+        752
+      ],
+      "id": "d119f8e8-a74f-43ee-bf5d-59d3522df1a3",
+      "name": "Mistral Cloud Chat Model",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "MNxx6hGVC1HOSiRq",
+          "name": "n8n local web-creat"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const agentOutput = $input.first().json;\n\n// Le noeud AI Agent natif n8n retourne la reponse dans .output\nconst raw = agentOutput.output || agentOutput.text || JSON.stringify(agentOutput);\n\ntry {\n  const clean = raw.replace(/```json|```/g, '').trim();\n  const exercise = JSON.parse(clean);\n\n  const required = ['type', 'question_en', 'question_fr_hint', 'explanation_fr', 'explanation_en'];\n  for (const field of required) {\n    if (!exercise[field]) throw new Error('Champ manquant : ' + field);\n  }\n\n  exercise._valid = true;\n  return [{ json: exercise }];\n\n} catch(e) {\n  return [{ json: {\n    type: 'multiple_choice',\n    question_en: 'What do you say when you meet someone for the first time?',\n    question_fr_hint: 'Que dit-on quand on rencontre quelquun pour la premiere fois ?',\n    options: ['Nice to meet you', 'See you later', 'Good night', 'Thank you'],\n    correct_index: 0,\n    explanation_fr: 'Nice to meet you signifie enchante — formule standard lors dune premiere rencontre.',\n    explanation_en: 'Nice to meet you is the standard phrase when meeting someone for the first time.',\n    adapted: false,\n    _valid: false,\n    _error: e.message,\n    _raw: raw.substring(0, 200)\n  }}];\n}"
+      },
+      "id": "15861078-bc96-42b3-8388-483012a03b46",
+      "name": "Parse & Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3584,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "4c484bfe-512b-40f5-8ed1-de5c45e93a4d",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        3824,
+        640
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook POST": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate": {
+      "main": [
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "createdAt": "2026-03-18 11:41:40.969",
+  "updatedAt": "2026-03-18 11:53:57.531",
+  "description": ""
+}
