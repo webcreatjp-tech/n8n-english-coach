@@ -1,0 +1,184 @@
+{
+  "id": "YHT6fMZSGLz66tnE",
+  "name": "English Coach - Shadowing Agent",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "english-coach/ask",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "2d2bc3f5-d743-4d9a-be8d-c74219bb4a00",
+      "name": "Webhook POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "english-coach-ask"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst topic = body.topic || 'everyday';\nconst topicDesc = body.topic_desc || 'everyday life';\nconst level = body.level || 'A1';\nconst history = body.history || [];\nconst sessionCount = body.sessionCount || 0;\n\n// Calcul du taux de reussite pour adapter la difficulte\nconst recent = history.slice(-6);\nconst correctRate = recent.length > 0\n  ? recent.filter(h => h.correct === true).length / recent.length\n  : 0.5;\n\nlet difficultyNote = 'Standard difficulty for this level. Sentences of 5-8 words.';\nif (correctRate >= 0.8 && recent.length >= 4) {\n  difficultyNote = 'Student repeats well. Use slightly longer sentences (8-10 words), slightly more complex vocabulary.';\n} else if (correctRate <= 0.3 && recent.length >= 4) {\n  difficultyNote = 'Student struggles. Use very short sentences (3-5 words), basic everyday words only.';\n}\n\n// Varier les types de shadowing\nconst shadowTypes = ['repeat', 'repeat', 'question_answer'];\nconst type = shadowTypes[sessionCount % shadowTypes.length];\n\nconst prompt = `You are an English pronunciation and speaking coach for a French adult beginner at level ${level}.\nGenerate ONE shadowing exercise.\n\nTopic area: ${topicDesc}\nDifficulty: ${difficultyNote}\n\n${\n  type === 'repeat'\n    ? `Exercise type: SHADOWING — student listens then repeats the sentence.\nGenerate a short, natural English sentence to repeat out loud.\nThe sentence must be practical and useful in real life.`\n    : `Exercise type: QUESTION/ANSWER — give a simple English question, student answers it out loud with a simple suggested answer.\nThe question and answer must both be very short and natural.`\n}\n\nRespond ONLY with this exact JSON structure, no markdown, no extra text:\n{\n  \"type\": \"${type === 'repeat' ? 'shadowing' : 'qa'}\",\n  \"sentence_en\": \"the English sentence or question to read aloud\",\n  \"sentence_fr\": \"exact French translation so the student understands\",\n  \"phonetic_tip\": \"one short French tip about pronunciation of a tricky word in this sentence (ex: 'morning se prononce MOR-nigne')\",\n  \"expected_words\": [\"list\", \"of\", \"key\", \"words\", \"student\", \"must\", \"say\"],\n  ${type === 'question_answer' ? '\"suggested_answer_en\": \"a simple suggested answer in English\", \"suggested_answer_fr\": \"French translation of the suggested answer\",' : ''}\n  \"explanation_fr\": \"1 sentence in French: what this expression means or when to use it\",\n  \"explanation_en\": \"same in English for TTS\"\n}`;\n\nreturn [{ json: { prompt, type, level, topic, sessionCount } }];"
+      },
+      "id": "0d6e722f-b365-4523-b26c-5778cf52a2b1",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "options": {
+          "systemMessage": "You are an English speaking coach. You always respond with valid JSON only. No markdown fences, no explanation, no extra text. Pure JSON."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        448,
+        0
+      ],
+      "id": "bf1e9f41-35c0-4ca5-b8c0-8f59928de41a",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "mistral-small-latest",
+        "options": {
+          "maxTokens": 500,
+          "temperature": 0.8
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        528,
+        224
+      ],
+      "id": "38e6bcec-02a0-40f2-aabc-eb0c75bc77a6",
+      "name": "Mistral Cloud Chat Model",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "MNxx6hGVC1HOSiRq",
+          "name": "n8n local web-creat"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const agentOutput = $input.first().json;\nconst raw = agentOutput.output || agentOutput.text || JSON.stringify(agentOutput);\n\ntry {\n  const clean = raw.replace(/```json|```/g, '').trim();\n  const ex = JSON.parse(clean);\n\n  const required = ['type', 'sentence_en', 'sentence_fr', 'expected_words', 'explanation_fr', 'explanation_en'];\n  for (const field of required) {\n    if (!ex[field]) throw new Error('Champ manquant : ' + field);\n  }\n\n  ex._valid = true;\n  return [{ json: ex }];\n\n} catch(e) {\n  return [{ json: {\n    type: 'shadowing',\n    sentence_en: 'Good morning, how are you?',\n    sentence_fr: 'Bonjour, comment allez-vous ?',\n    phonetic_tip: 'morning se prononce MOR-nigne',\n    expected_words: ['good', 'morning', 'how', 'are', 'you'],\n    explanation_fr: 'Formule de salutation du matin, très utilisée au quotidien.',\n    explanation_en: 'Standard morning greeting used every day.',\n    _valid: false,\n    _error: e.message,\n    _raw: raw.substring(0, 200)\n  }}];\n}"
+      },
+      "id": "e5d6451a-427d-44c7-9a1d-5e290412ae1c",
+      "name": "Parse & Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "4a2d73da-d879-4295-8d66-a142218fe39a",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1024,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook POST": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate": {
+      "main": [
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "meta": {},
+  "createdAt": "2026-03-18 12:03:18.960",
+  "updatedAt": "2026-03-18 12:03:18.000",
+  "description": ""
+}
